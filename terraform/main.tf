@@ -28,7 +28,7 @@ resource "azurerm_storage_account" "workload" {
 
   min_tls_version                 = "TLS1_2"
   https_traffic_only_enabled      = true
-  allow_nested_items_to_be_public = true
+  allow_nested_items_to_be_public = false
   local_user_enabled              = false
 
   # Explicit so Checkov can evaluate the SAS policy (CKV2_AZURE_41). Same as the provider default; see CKV2_AZURE_40 in .checkov.yaml.
@@ -58,6 +58,33 @@ resource "azurerm_storage_container" "reports" {
   name                  = "reports"
   storage_account_id    = azurerm_storage_account.workload.id
   container_access_type = "private"
+}
+
+# Blob read/write/delete logging to Log Analytics through a diagnostic setting,
+# Microsoft's current approach. See CKV2_AZURE_21 in .checkov.yaml.
+resource "azurerm_log_analytics_workspace" "logs" {
+  name                = "log-devsecops-gavinbarbee-${local.suffix}"
+  resource_group_name = data.azurerm_resource_group.workload.name
+  location            = data.azurerm_resource_group.workload.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  tags                = local.tags
+}
+
+resource "azurerm_monitor_diagnostic_setting" "blob_logs" {
+  name                       = "blob-to-log-analytics"
+  target_resource_id         = "${azurerm_storage_account.workload.id}/blobServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.logs.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+  enabled_log {
+    category = "StorageWrite"
+  }
+  enabled_log {
+    category = "StorageDelete"
+  }
 }
 
 # ── Azure OpenAI ─────────────────────────────────────────────────────────────

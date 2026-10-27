@@ -20,3 +20,6 @@ skip-check:
   - CKV_AZURE_33    # Storage: queue service logging
   # False positive: outbound access is restricted with an EMPTY allow-list, which is stricter than the check accepts.
   - CKV_AZURE_247   # Azure OpenAI: outbound access restricted with an FQDN allow-list
+  # Blob logging is enabled through a diagnostic setting. This check only recognizes
+  # azurerm_log_analytics_storage_insights, which puts the storage account key in Terraform state.
+  - CKV2_AZURE_21   # Storage: blob read logging via Log Analytics storage insights
