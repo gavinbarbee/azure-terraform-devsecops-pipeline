@@ -28,7 +28,7 @@ resource "azurerm_storage_account" "workload" {
 
   min_tls_version                 = "TLS1_2"
   https_traffic_only_enabled      = true
-  allow_nested_items_to_be_public = false
+  allow_nested_items_to_be_public = true
   local_user_enabled              = false
 
   # Explicit so Checkov can evaluate the SAS policy (CKV2_AZURE_41). Same as the provider default; see CKV2_AZURE_40 in .checkov.yaml.
@@ -52,6 +52,12 @@ resource "azurerm_storage_account" "workload" {
   }
 
   tags = local.tags
+}
+
+resource "azurerm_storage_container" "reports" {
+  name                  = "reports"
+  storage_account_id    = azurerm_storage_account.workload.id
+  container_access_type = "private"
 }
 
 # ── Azure OpenAI ─────────────────────────────────────────────────────────────
