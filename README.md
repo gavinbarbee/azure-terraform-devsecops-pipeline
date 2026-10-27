@@ -217,9 +217,9 @@ checkov --directory terraform --config-file .checkov.yaml
 | `Checkov security scan` | Every push, PR, and manual run | Blocking scan. Uploads SARIF to code scanning and saves JSON for the AI job. |
 | `AI remediation comment` | Scan **fails** on a PR | Signs in with OIDC, asks Azure OpenAI for a fix per unique check, posts or updates one PR comment |
 | `Terraform plan` | Scan **passes** | `fmt -check`, `init`, `validate`, `plan -out=main.tfplan`. Comments the plan on PRs and saves it as an artifact on `main`. |
-| `Terraform apply` | Push to `main`, after the plan job | Waits for my approval on the `dev` environment, then applies the saved plan |
+| `Terraform apply` | Push to `main`, when the plan has changes | Waits for my approval on the `dev` environment, then applies the saved plan |
 
-The apply job applies the exact plan file I reviewed rather than re-planning. A `concurrency` group keeps two runs from fighting over the state lock.
+The apply job applies the exact plan file I reviewed rather than re-planning. A `concurrency` group keeps two runs from fighting over the state lock. The plan step uses `-detailed-exitcode`, so a merge with no infrastructure changes skips the apply instead of asking for an approval.
 
 ### 7. First deploy
 
