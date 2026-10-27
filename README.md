@@ -109,9 +109,11 @@ What it creates:
 
 | Federated credential | Subject | Used by |
 |---|---|---|
-| `github-pull-requests` | `repo:gavinbarbee/azure-terraform-devsecops-pipeline:pull_request` | PR plan and AI remediation |
-| `github-main-branch` | `repo:gavinbarbee/azure-terraform-devsecops-pipeline:ref:refs/heads/main` | Plan on `main` |
-| `github-env-dev` | `repo:gavinbarbee/azure-terraform-devsecops-pipeline:environment:dev` | Apply (runs in the `dev` environment) |
+| `github-pull-requests` | `repo:gavinbarbee@177060158/azure-terraform-devsecops-pipeline@1436092606:pull_request` | PR plan and AI remediation |
+| `github-main-branch` | `repo:gavinbarbee@177060158/azure-terraform-devsecops-pipeline@1436092606:ref:refs/heads/main` | Plan on `main` |
+| `github-env-dev` | `repo:gavinbarbee@177060158/azure-terraform-devsecops-pipeline@1436092606:environment:dev` | Apply (runs in the `dev` environment) |
+
+GitHub issues immutable subjects for repositories created after mid-2026. The owner and repo names carry their numeric IDs (`owner@ownerId/repo@repoId`), so if this repo were ever deleted or renamed, someone else couldn't claim the name and inherit its access to Azure. The bootstrap reads those IDs from the GitHub API rather than hardcoding them.
 
 - **Least-privilege roles:**
 
@@ -366,7 +368,7 @@ The repo secrets are left in place. They point at a deleted app registration, so
 
 ## Key Takeaways
 
-- **OIDC removes the secret, but the subject claim is strict.** A job that runs in a GitHub environment presents `environment:dev` instead of the branch ref. PRs present `pull_request`. Each context needs its own federated credential, or login fails.
+- **OIDC removes the secret, but the subject claim is strict.** A job in a GitHub environment presents `environment:dev` instead of the branch ref, and PRs present `pull_request`. New repos also embed immutable owner and repo IDs in the subject, so my first run failed with AADSTS700213 until the federated credentials matched the exact format GitHub sends.
 - **Least privilege changes the Terraform design.** Scoping the pipeline to one resource group meant pre-creating that group, reading it as a data source, and turning off automatic provider registration.
 - **A security gate is only real if it can fail.** An advisory scan is easy to ignore. A blocking scan forces every exception to be written down with a reason, and that list becomes documentation.
 - **"No stored credentials" has to hold everywhere.** That meant OIDC into Azure, Entra auth for state, and local auth disabled on Azure OpenAI. Keyless auth removed the need for a Key Vault to hold an API key.

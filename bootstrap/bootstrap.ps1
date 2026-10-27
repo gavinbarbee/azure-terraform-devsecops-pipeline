@@ -133,16 +133,24 @@ if (-not $SpObjectId) {
 }
 
 Write-Step 'Adding federated credentials'
+# Repos created after mid-2026 get GitHub's immutable OIDC subject format: the owner
+# and repo names carry their numeric IDs (owner@ownerId/repo@repoId), so a recycled
+# name can't be used to impersonate this repo. Read the IDs from GitHub, don't guess.
+$RepoInfo = gh api "repos/$Repo" --jq '[.owner.login, .owner.id, .name, .id] | @tsv'
+Assert-Success 'read repo IDs from GitHub'
+$OwnerLogin, $OwnerId, $RepoName, $RepoId = $RepoInfo -split "`t"
+$SubjectPrefix = "repo:${OwnerLogin}@${OwnerId}/${RepoName}@${RepoId}"
 $Subjects = [ordered]@{
-    'github-pull-requests' = "repo:${Repo}:pull_request"
-    'github-main-branch'   = "repo:${Repo}:ref:refs/heads/main"
-    'github-env-dev'       = "repo:${Repo}:environment:dev"
+    'github-pull-requests' = "${SubjectPrefix}:pull_request"
+    'github-main-branch'   = "${SubjectPrefix}:ref:refs/heads/main"
+    'github-env-dev'       = "${SubjectPrefix}:environment:dev"
 }
-$ExistingCreds = @(az ad app federated-credential list --id $AppId --query "[].name" -o tsv)
+$ExistingCreds = (az ad app federated-credential list --id $AppId -o json) -join "`n" | ConvertFrom-Json
 Assert-Success 'list federated credentials'
 foreach ($name in $Subjects.Keys) {
-    if ($ExistingCreds -contains $name) {
-        Write-Host "  $name already exists"
+    $existing = @($ExistingCreds) | Where-Object { $_.name -eq $name }
+    if ($existing -and $existing.subject -eq $Subjects[$name]) {
+        Write-Host "  $name already up to date"
         continue
     }
     $credFile = Join-Path $env:TEMP "$name.json"
@@ -153,10 +161,16 @@ foreach ($name in $Subjects.Keys) {
         audiences = @('api://AzureADTokenExchange')
     } | ConvertTo-Json
     [System.IO.File]::WriteAllText($credFile, $credJson)   # UTF-8 without BOM
-    az ad app federated-credential create --id $AppId --parameters "@$credFile" -o none
-    Assert-Success "create federated credential $name"
+    if ($existing) {
+        az ad app federated-credential update --id $AppId --federated-credential-id $name --parameters "@$credFile" -o none
+        Assert-Success "update federated credential $name"
+        Write-Host "  updated $name -> $($Subjects[$name])"
+    } else {
+        az ad app federated-credential create --id $AppId --parameters "@$credFile" -o none
+        Assert-Success "create federated credential $name"
+        Write-Host "  added $name -> $($Subjects[$name])"
+    }
     Remove-Item $credFile
-    Write-Host "  added $name -> $($Subjects[$name])"
 }
 
 # ── Least-privilege roles ───────────────────────────────────────────────────
