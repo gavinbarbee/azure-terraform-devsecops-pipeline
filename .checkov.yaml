@@ -1,0 +1,22 @@
+# Checkov configuration for the pipeline security gate.
+# Every skipped check has a written reason. Anything not listed here blocks the merge.
+framework:
+  - terraform
+compact: true
+quiet: true
+skip-check:
+  # GitHub-hosted runners reach Azure over the public internet. Production would use
+  # self-hosted runners in a VNet with private endpoints and default-deny network rules.
+  - CKV_AZURE_59    # Storage: public network access disabled
+  - CKV_AZURE_35    # Storage: default network rule set to Deny
+  - CKV2_AZURE_33   # Storage: private endpoint configured
+  - CKV_AZURE_134   # Azure OpenAI: public network access disabled
+  # The azurerm provider reads some storage settings with shared key auth.
+  - CKV2_AZURE_40   # Storage: shared key authorization disabled
+  # Lab cost and scope: no geo-redundancy, no customer-managed keys, no queues in use.
+  - CKV_AZURE_206   # Storage: geo-redundant replication
+  - CKV2_AZURE_1    # Storage: customer-managed key encryption
+  - CKV2_AZURE_22   # Azure OpenAI: customer-managed key encryption
+  - CKV_AZURE_33    # Storage: queue service logging
+  # False positive: outbound access is restricted with an EMPTY allow-list, which is stricter than the check accepts.
+  - CKV_AZURE_247   # Azure OpenAI: outbound access restricted with an FQDN allow-list

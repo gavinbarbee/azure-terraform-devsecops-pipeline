@@ -1,0 +1,4 @@
+# AI remediation job dependencies
+openai==3.29.0
+azure-identity==1.26.0
+requests==2.34.2

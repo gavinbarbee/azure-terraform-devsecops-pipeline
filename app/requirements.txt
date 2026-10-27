@@ -1,0 +1,5 @@
+# FastAPI wrapper dependencies
+fastapi==0.143.0
+uvicorn==0.54.0
+openai==3.29.0
+azure-identity==1.26.0
