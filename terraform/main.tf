@@ -54,6 +54,39 @@ resource "azurerm_storage_account" "workload" {
   tags = local.tags
 }
 
+resource "azurerm_storage_container" "reports" {
+  name                  = "reports"
+  storage_account_id    = azurerm_storage_account.workload.id
+  container_access_type = "private"
+}
+
+# Blob read/write/delete logging to Log Analytics through a diagnostic setting,
+# Microsoft's current approach. See CKV2_AZURE_21 in .checkov.yaml.
+resource "azurerm_log_analytics_workspace" "logs" {
+  name                = "log-devsecops-gavinbarbee-${local.suffix}"
+  resource_group_name = data.azurerm_resource_group.workload.name
+  location            = data.azurerm_resource_group.workload.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  tags                = local.tags
+}
+
+resource "azurerm_monitor_diagnostic_setting" "blob_logs" {
+  name                       = "blob-to-log-analytics"
+  target_resource_id         = "${azurerm_storage_account.workload.id}/blobServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.logs.id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+  enabled_log {
+    category = "StorageWrite"
+  }
+  enabled_log {
+    category = "StorageDelete"
+  }
+}
+
 # ── Azure OpenAI ─────────────────────────────────────────────────────────────
 # Keyless: local (API key) auth is disabled, so callers must present an Entra
 # ID token. Token auth requires a custom subdomain.
