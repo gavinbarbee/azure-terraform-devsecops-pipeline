@@ -112,6 +112,8 @@ jobs:
     needs: scan
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
     permissions:
       contents: read
       id-token: write
@@ -143,7 +145,14 @@ jobs:
         run: terraform validate
 
       - name: Terraform plan
-        run: terraform plan -input=false -out=main.tfplan
+        id: plan
+        run: |
+          set +e
+          terraform plan -input=false -detailed-exitcode -out=main.tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          if [ "$code" -eq 2 ]; then echo "has_changes=true" >> "$GITHUB_OUTPUT"; else echo "has_changes=false" >> "$GITHUB_OUTPUT"; fi
 
       - name: Render plan
         run: terraform show -no-color main.tfplan > plan.txt
@@ -194,7 +203,7 @@ jobs:
   apply:
     name: Terraform apply
     needs: plan
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: dev

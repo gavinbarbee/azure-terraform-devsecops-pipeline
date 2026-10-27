@@ -23,12 +23,17 @@ MAX_FINDINGS = 5
 API_VERSION = "2024-10-21"
 COMMENT_MARKER = "<!-- ai-remediation -->"
 GITHUB_API = "https://api.github.com"
+TF_DIR = "terraform"
 
 SYSTEM_PROMPT = (
-    "You are a DevSecOps engineer who specializes in Terraform on Azure. "
-    "Given a failed Checkov check and the Terraform block it flagged, return a "
-    "corrected block and a short explanation. Be concise and practical. Change "
-    "only what the check requires."
+    "You are a DevSecOps engineer reviewing Terraform for Azure. The code targets "
+    "Terraform 1.9+ and the hashicorp/azurerm provider 4.x. Given a failed Checkov "
+    "check and the exact Terraform block it flagged, suggest the smallest correct fix. "
+    "Keep the resource type and name exactly as given. Show only the arguments or "
+    "nested blocks to add or change, inside the real resource header, not the whole "
+    "resource. Use only arguments that exist in azurerm 4.x. Never invent placeholder "
+    "names. If the fix needs a separate resource, say so and give a complete azurerm "
+    "4.x resource that references the flagged resource by its real address."
 )
 
 
@@ -61,21 +66,37 @@ def load_findings(path: str) -> list[dict]:
     return findings
 
 
-def flagged_code(check: dict) -> str:
-    """Checkov stores the flagged block as [line_number, text] pairs."""
-    return "".join(line for _, line in check.get("code_block") or [])
+def flagged_code(check: dict) -> tuple[str, str]:
+    """Return (path, code) for the flagged block, read from the checked-out repo.
+
+    Checkov's code_block can be empty (for example with compact output), so the exact
+    lines are read from the file using file_line_range. Falls back to code_block.
+    """
+    start, end = (check.get("file_line_range") or [0, 0])[:2]
+    candidates = [
+        (check.get("repo_file_path") or "").lstrip("/"),
+        os.path.join(TF_DIR, (check.get("file_path") or "").lstrip("/")),
+    ]
+    for path in candidates:
+        if path and start and end and os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+            return path, "".join(lines[start - 1:end])
+    return check.get("file_path", "unknown"), "".join(line for _, line in check.get("code_block") or [])
 
 
 def build_prompt(check: dict) -> str:
+    path, code = flagged_code(check)
+    start, end = (check.get("file_line_range") or [0, 0])[:2]
     return (
         f"Checkov check {check.get('check_id')} ({check.get('check_name')}) failed.\n"
-        f"Resource: {check.get('resource')}\n"
-        f"File: {check.get('file_path')}\n"
+        f"Resource address: {check.get('resource')}\n"
+        f"File: {path} (lines {start}-{end})\n"
         f"Guideline: {check.get('guideline') or 'none provided'}\n\n"
-        f"Flagged Terraform:\n```hcl\n{flagged_code(check)}\n```\n\n"
+        f"Flagged Terraform, exactly as it appears in the repo:\n```hcl\n{code.rstrip()}\n```\n\n"
         "Respond in exactly this format:\n"
         "**Issue:** <one sentence>\n"
-        "**Fix:**\n```hcl\n<corrected block>\n```\n"
+        "**Fix:**\n```hcl\n<only the changed or added lines, inside the real resource header>\n```\n"
         "**Why it matters:** <one sentence>"
     )
 
@@ -89,7 +110,7 @@ def get_suggestion(client: AzureOpenAI, deployment: str, check: dict) -> str | N
                 {"role": "user", "content": build_prompt(check)},
             ],
             max_tokens=600,
-            temperature=0.1,
+            temperature=0,
         )
         return response.choices[0].message.content
     except Exception as exc:  # one failed call should not sink the whole comment
@@ -164,10 +185,11 @@ def main() -> None:
         print(f"[{i}/{len(shown)}] Requesting fix for {check_id} on {check.get('resource')}")
 
         suggestion = get_suggestion(client, deployment, check)
+        path, _ = flagged_code(check)
         sections += [
             "---",
             f"### {i}. `{check_id}`: {check.get('check_name', '')}",
-            f"**Resource:** `{check.get('resource')}` in `{check.get('file_path')}` (lines {start}-{end})",
+            f"**Resource:** `{check.get('resource')}` in `{path}` (lines {start}-{end})",
             "",
             suggestion or "_The AI call failed for this finding. See the job log._",
             "",
