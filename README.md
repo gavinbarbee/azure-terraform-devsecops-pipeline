@@ -353,8 +353,8 @@ cd app
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-$env:AZURE_OPENAI_ENDPOINT = (terraform -chdir=..\terraform output -raw openai_endpoint)
-$env:AZURE_OPENAI_DEPLOYMENT = (terraform -chdir=..\terraform output -raw openai_deployment_name)
+$env:AZURE_OPENAI_ENDPOINT = (terraform "-chdir=..\terraform" output -raw openai_endpoint)
+$env:AZURE_OPENAI_DEPLOYMENT = (terraform "-chdir=..\terraform" output -raw openai_deployment_name)
 uvicorn main:app --reload
 ```
 
@@ -366,7 +366,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/chat `
   -Body (@{ message = 'In one sentence, why use OIDC instead of a client secret in CI/CD?' } | ConvertTo-Json)
 ```
 
-> 📸 Screenshot: API response
+![FastAPI /chat endpoint answering through Azure OpenAI with Entra token auth](screenshots/10-api-response.png)
 
 ## Verification Checklist
 
@@ -382,7 +382,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/chat `
 - [ ] A merge with no infrastructure changes skips the apply instead of waiting for approval
 - [ ] The plan comment on the PR updates in place rather than duplicating
 - [ ] Branch protection requires `Checkov security scan` and `Terraform plan`
-- [ ] (Optional) The FastAPI `/chat` endpoint returns a response using token auth
+- [x] The FastAPI `/chat` endpoint returns a response using token auth
 
 ## Troubleshooting
 
@@ -398,6 +398,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/chat `
 | GlobalStandard quota for `gpt-4.1-mini` didn't show up in `az cognitiveservices usage list` | The quota is listed as `OpenAI.GlobalStandard.gpt4.1-mini`, with no hyphen after `gpt` | List all GlobalStandard entries and match on that name |
 | Code scanning alerts API returned nothing for the PR | The API defaults to the default branch | Query with `?ref=refs/pull/<number>/merge` |
 | README emoji turned into mojibake (`ðŸ“¸`) after a PowerShell edit | Windows PowerShell 5.1 read the UTF-8 file as Windows-1252 and wrote it back double-encoded | Edit files with an editor or tool that preserves UTF-8, and check for a BOM or mojibake before committing |
+| `terraform -chdir=..\terraform output` failed with "Invalid -chdir option" in PowerShell | Windows PowerShell 5.1 splits an argument like `-chdir=..\terraform`, where a dot follows the `=`, into two arguments | Quote the whole argument: `terraform "-chdir=..\terraform" output ...` |
 
 ## Cleanup
 
