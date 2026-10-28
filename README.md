@@ -363,7 +363,7 @@ In a second terminal:
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/chat `
   -ContentType 'application/json' `
-  -Body (@{ message = 'In one sentence, why use OIDC instead of a client secret in CI/CD?' } | ConvertTo-Json)
+  -Body (@{ message = 'In one sentence, why use OIDC instead of a client secret in CI/CD?' } | ConvertTo-Json) | Format-List
 ```
 
 ![FastAPI /chat endpoint answering through Azure OpenAI with Entra token auth](screenshots/10-api-response.png)
