@@ -20,6 +20,6 @@ provider "azurerm" {
 
   # The pipeline identity only has rights on the workload resource group, so it
   # cannot register resource providers at subscription scope. bootstrap.ps1
-  # registers the two providers this configuration needs.
+  # registers the providers this configuration needs.
   resource_provider_registrations = "none"
 }

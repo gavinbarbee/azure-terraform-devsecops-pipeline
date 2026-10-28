@@ -1,6 +1,6 @@
 # Azure Terraform DevSecOps Pipeline
 
-**Status:** 🚧 Build in progress
+**Status:** ✅ Complete: built, tested, and deployed on Azure (East US 2)
 
 ## Video Walkthrough
 
@@ -25,6 +25,7 @@ Nothing in the pipeline uses a stored credential:
 - **Policy-as-code security gate:** Checkov with a documented exception list, plus SARIF results in GitHub code scanning.
 - **Azure OpenAI deployed as code:** the account and model deployment are Terraform resources, local auth is disabled, and calls are authenticated by token.
 - **Python automation:** the remediation script reads real scan output, de-duplicates findings, rate-limits calls, and updates a single PR comment in place.
+- **Observability:** blob read, write, and delete logs sent to a Log Analytics workspace through a diagnostic setting.
 - **Change control:** a GitHub environment with a required reviewer, plus branch protection with required status checks.
 
 ## Architecture Diagram
@@ -45,6 +46,7 @@ flowchart LR
         state[(Remote state<br/>stgavinbarbeetfstate)]
         subgraph rg[rg-devsecops-gavinbarbee-dev]
             st[Storage account]
+            law[Log Analytics workspace]
             aoai[Azure OpenAI<br/>local auth disabled]
         end
     end
@@ -54,6 +56,7 @@ flowchart LR
     apply --> state
     apply --> st
     apply --> aoai
+    st -->|blob logs| law
 ```
 
 ## Prerequisites
@@ -74,6 +77,8 @@ flowchart LR
 | Workload resource group | `rg-devsecops-gavinbarbee-dev` |
 | Workload storage account | `stgavinbarbee<8-char suffix>` |
 | Azure OpenAI account | `oai-devsecops-gavinbarbee-<8-char suffix>` |
+| Log Analytics workspace | `log-devsecops-gavinbarbee-<8-char suffix>` |
+| Blob diagnostic setting | `blob-to-log-analytics` |
 | Model deployment | `chat` |
 | App registration | `github-actions-devsecops-pipeline` |
 | GitHub environment | `dev` |
@@ -127,9 +132,9 @@ GitHub issues immutable subjects for repositories created after mid-2026. The ow
 
 - **GitHub config:** repo secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. These are identifiers, not credentials. It also creates a `dev` environment with me as the required reviewer.
 
-> 📸 Screenshot: app registration → Certificates & secrets → Federated credentials (three entries, no client secrets)
+![App registration with three federated credentials and zero client secrets](screenshots/02-federated-credentials.png)
 
-> 📸 Screenshot: role assignments on `rg-devsecops-gavinbarbee-dev`
+![Role assignments on rg-devsecops-gavinbarbee-dev](screenshots/02-role-assignments.png)
 
 ### 3. Terraform configuration
 
@@ -143,7 +148,7 @@ provider "azurerm" {
 }
 ```
 
-The pipeline identity has no subscription-level rights, so the provider can't auto-register resource providers. Bootstrap registers `Microsoft.Storage` and `Microsoft.CognitiveServices` once instead.
+The pipeline identity has no subscription-level rights, so the provider can't auto-register resource providers. Bootstrap registers the four providers this configuration uses (`Microsoft.Storage`, `Microsoft.CognitiveServices`, `Microsoft.OperationalInsights`, and `Microsoft.Insights`) once instead.
 
 ```hcl
 resource "azurerm_cognitive_account" "openai" {
@@ -172,7 +177,7 @@ cd ..
 
 I locked providers for both platforms because I develop on Windows and the pipeline runs on Linux. Without both hashes in `.terraform.lock.hcl`, `terraform init` on the runner would fail. I don't apply locally: the pipeline owns every apply.
 
-> 📸 Screenshot: local `terraform plan` summary
+![Terraform plan in the pipeline: 4 to add, 0 to change, 0 to destroy](screenshots/04-plan-summary.png)
 
 ### 5. The security gate
 
@@ -198,6 +203,7 @@ The remaining exceptions are in [`.checkov.yaml`](.checkov.yaml), each with a wr
 | CKV_AZURE_206 | Geo-redundant storage | Lab cost |
 | CKV2_AZURE_1, CKV2_AZURE_22 | Customer-managed keys | Lab scope; Microsoft-managed keys are used |
 | CKV_AZURE_33 | Queue service logging | No queues are used |
+| CKV2_AZURE_21 | Blob read logging through Log Analytics storage insights | Logging is on through a diagnostic setting (step 9). The check only recognizes storage insights, which takes the storage account key as an argument and puts it in Terraform state. |
 
 Running it locally before pushing:
 
@@ -233,9 +239,15 @@ gh run watch
 
 The scan and plan pass, and then the apply job waits for review. I approved it in GitHub under Actions → the run → Review deployments.
 
-> 📸 Screenshot: apply job waiting for approval on the `dev` environment
+![Apply job waiting for approval on the dev environment](screenshots/07-apply-waiting.png)
 
-> 📸 Screenshot: successful run with all jobs green
+![Approving the dev deployment after reviewing the plan](screenshots/07-review-deployment.png)
+
+![Successful run with scan, plan, and apply green](screenshots/07-run-success.png)
+
+![Apply complete: 4 added](screenshots/07-apply-complete.png)
+
+![Deployed resources in rg-devsecops-gavinbarbee-dev](screenshots/07-resource-group.png)
 
 The AI remediation job needs to know where the model lives, so I stored the Terraform outputs as repository variables:
 
@@ -246,7 +258,9 @@ gh variable set AZURE_OPENAI_DEPLOYMENT --body (terraform output -raw openai_dep
 cd ..
 ```
 
-> 📸 Screenshot: Azure OpenAI account → Keys and Endpoint showing local auth disabled
+![Azure OpenAI Keys and Endpoint: API key authentication is disabled](screenshots/07-openai-keys-disabled.png)
+
+![Azure OpenAI resource JSON: disableLocalAuth true, restrictOutboundNetworkAccess true, empty allowedFqdnList](screenshots/07-openai-json.png)
 
 ### 8. Branch protection
 
@@ -291,19 +305,44 @@ gh pr create --fill
 
 What happened:
 
-1. The Checkov job failed on CKV_AZURE_190 (blob public access), and `Terraform plan` never ran.
-2. The finding appeared in the Security tab under code scanning.
-3. The AI remediation job posted a comment with the corrected block.
-4. I set `allow_nested_items_to_be_public = false` and pushed again. The scan passed, and the plan comment showed exactly one resource to add.
-5. I merged, approved the `dev` deployment, and the container was created.
+1. **The gate failed with three findings, not one.** CKV_AZURE_190 and CKV2_AZURE_47 flagged the public-access setting. CKV2_AZURE_21 flagged the new container, because it wants blob read logging. `Terraform plan` never ran.
+2. **The findings appeared in code scanning** on the PR.
+3. **The AI remediation job posted a comment, and the first version was useless.** It invented resource names like `examplestorageacct`. The cause was that Checkov's JSON output had an empty `code_block` for every finding, so the model never saw my code.
+4. **I fixed the script in a separate PR (#2).** It now reads the flagged lines straight from the repo and tells the model it targets azurerm 4.x. After that, the CKV_AZURE_190 suggestion was correct (`allow_nested_items_to_be_public = false`). The other two still invented things: an argument azurerm removed, and a resource that doesn't exist. That's exactly why the pipeline posts suggestions as comments for a human to review instead of committing them.
+5. **I fixed the public-access setting** by setting `allow_nested_items_to_be_public = false`.
+6. **I added blob logging the current way.** CKV2_AZURE_21 only accepts `azurerm_log_analytics_storage_insights`, which takes the storage account key as an argument and stores it in Terraform state. Instead, I added a Log Analytics workspace and a diagnostic setting on the blob service, and documented the skip in `.checkov.yaml`:
 
-> 📸 Screenshot: failed Checkov check on the PR
+```hcl
+resource "azurerm_monitor_diagnostic_setting" "blob_logs" {
+  name                       = "blob-to-log-analytics"
+  target_resource_id         = "${azurerm_storage_account.workload.id}/blobServices/default"
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.logs.id
 
-> 📸 Screenshot: AI remediation comment
+  enabled_log {
+    category = "StorageRead"
+  }
+  enabled_log {
+    category = "StorageWrite"
+  }
+  enabled_log {
+    category = "StorageDelete"
+  }
+}
+```
 
-> 📸 Screenshot: code scanning alert for CKV_AZURE_190
+7. **The scan passed and the change shipped.** The plan comment showed 3 to add: the container, the workspace, and the diagnostic setting. I merged, approved the `dev` deployment, and all three were created.
 
-> 📸 Screenshot: plan comment after the fix
+![Checkov gate failing on the PR, with plan skipped](screenshots/09-failed-gate.png)
+
+![AI remediation comment before grounding, with invented resource names](screenshots/09-ai-comment-before.png)
+
+![AI remediation comment after grounding](screenshots/09-ai-comment-after.png)
+
+![Checkov finding shown inline on the PR by code scanning](screenshots/09-code-scanning-alert.png)
+
+![Plan after the fix: 3 to add](screenshots/09-plan-after-fix.png)
+
+![Blob diagnostic setting sending logs to Log Analytics](screenshots/09-blob-diagnostic-setting.png)
 
 ### 10. Calling the model (optional)
 
@@ -339,6 +378,8 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/chat `
 - [ ] Azure OpenAI account shows local auth disabled; the model deployment `chat` exists
 - [ ] Checkov SARIF results appear in the Security tab under code scanning
 - [ ] The break/fix PR was blocked by the gate, received an AI remediation comment, and passed after the fix
+- [ ] The blob diagnostic setting sends StorageRead, StorageWrite, and StorageDelete logs to the Log Analytics workspace
+- [ ] A merge with no infrastructure changes skips the apply instead of waiting for approval
 - [ ] The plan comment on the PR updates in place rather than duplicating
 - [ ] Branch protection requires `Checkov security scan` and `Terraform plan`
 - [ ] (Optional) The FastAPI `/chat` endpoint returns a response using token auth
@@ -347,7 +388,16 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/chat `
 
 | Issue | Cause | Fix |
 |---|---|---|
-| | | |
+| First pipeline run failed at `terraform init` with `AADSTS700213: No matching federated identity record found` | Repos created after mid-2026 get GitHub's immutable OIDC subject (`repo:owner@ownerId/repo@repoId:...`), but the federated credentials used the old name-only format | Read the owner and repo IDs from the GitHub API in the bootstrap, and update the three federated credentials to the immutable format |
+| Checkov failed CKV2_AZURE_41 (SAS expiration policy) even though `sas_policy` was set | The check reads only the config, and requires `shared_access_key_enabled` to be written explicitly. The provider default of `true` doesn't count. | Set `shared_access_key_enabled = true` explicitly, which changes nothing in Azure |
+| Checkov failed CKV_AZURE_247 with outbound access already restricted | The check requires a non-empty `fqdns` allow-list, so an empty list (the strictest setting) fails | Kept the empty allow-list and documented the check as a false positive in `.checkov.yaml` |
+| Checkov failed CKV2_AZURE_21 after adding a blob container | The check only accepts `azurerm_log_analytics_storage_insights`, which puts the storage account key in Terraform state | Added a Log Analytics workspace and a blob diagnostic setting instead, and documented the skip |
+| The AI remediation comment invented resource names | Checkov's JSON output had an empty `code_block` for every finding, so the model never saw the real code | The script reads the flagged lines from the repo using `repo_file_path` and `file_line_range` |
+| AI suggestions used a removed argument and a nonexistent resource, even after grounding | Model hallucination: a small model doesn't reliably know the azurerm 4.x schema | Suggestions are posted as comments for human review, never applied automatically |
+| Every merge to `main` asked for an apply approval, even with no changes | The apply job ran on every push to `main`, and while it waited for approval the concurrency group blocked other runs | Use `terraform plan -detailed-exitcode` and skip apply when the plan has no changes |
+| GlobalStandard quota for `gpt-4.1-mini` didn't show up in `az cognitiveservices usage list` | The quota is listed as `OpenAI.GlobalStandard.gpt4.1-mini`, with no hyphen after `gpt` | List all GlobalStandard entries and match on that name |
+| Code scanning alerts API returned nothing for the PR | The API defaults to the default branch | Query with `?ref=refs/pull/<number>/merge` |
+| README emoji turned into mojibake (`ðŸ“¸`) after a PowerShell edit | Windows PowerShell 5.1 read the UTF-8 file as Windows-1252 and wrote it back double-encoded | Edit files with an editor or tool that preserves UTF-8, and check for a BOM or mojibake before committing |
 
 ## Cleanup
 
@@ -372,8 +422,10 @@ The repo secrets are left in place. They point at a deleted app registration, so
 - **Least privilege changes the Terraform design.** Scoping the pipeline to one resource group meant pre-creating that group, reading it as a data source, and turning off automatic provider registration.
 - **A security gate is only real if it can fail.** An advisory scan is easy to ignore. A blocking scan forces every exception to be written down with a reason, and that list becomes documentation.
 - **"No stored credentials" has to hold everywhere.** That meant OIDC into Azure, Entra auth for state, and local auth disabled on Azure OpenAI. Keyless auth removed the need for a Key Vault to hold an API key.
-- **Apply what was reviewed.** Saving the plan as an artifact and applying that file means the approved change is the one that ships.
+- **Scanners have blind spots, so read the check's source.** Three findings in this build only made sense after reading the check code. One penalized a stricter setting (CKV_AZURE_247). One ignored a provider default (CKV2_AZURE_41). One only accepts a logging mechanism that puts a storage key in state (CKV2_AZURE_21).
+- **AI suggestions need grounding and a reviewer.** Without the real code, the model invented resources. With it, the model got one fix right but still invented an argument and a resource for the others. That's why it comments rather than commits.
+- **Apply what was reviewed.** Saving the plan as an artifact and applying that file means the approved change is the one that ships. Skipping apply when nothing changed keeps approvals meaningful.
 
 ---
 
-Built by **Gavin Barbee** · Cloud Engineer · [github.com/gavinbarbee](https://github.com/gavinbarbee) · Time to complete: _updated after build_
+Built by **Gavin Barbee** · Cloud Engineer · [github.com/gavinbarbee](https://github.com/gavinbarbee) · Time to complete: About 2 days
