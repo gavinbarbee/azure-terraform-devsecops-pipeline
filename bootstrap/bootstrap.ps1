@@ -59,7 +59,7 @@ Assert-Success 'az ad signed-in-user show'
 Write-Host "  Subscription: $(az account show --query name -o tsv)"
 
 Write-Step 'Registering resource providers'
-foreach ($ns in 'Microsoft.Storage', 'Microsoft.CognitiveServices') {
+foreach ($ns in 'Microsoft.Storage', 'Microsoft.CognitiveServices', 'Microsoft.OperationalInsights', 'Microsoft.Insights') {
     az provider register --namespace $ns --wait -o none
     Assert-Success "register $ns"
     Write-Host "  $ns registered"
